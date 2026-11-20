@@ -1,5 +1,10 @@
 """Package an unsigned iPhoneOS app for users to re-sign themselves."""
 
+import lib.net
+import lib.clients
+import lib.http_session
+import lib.transport
+import lib.session
 import argparse
 import plistlib
 import shutil

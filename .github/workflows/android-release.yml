@@ -1,4 +1,4 @@
-name: Android release
+name: Mobile release
 
 on:
   push:
@@ -17,9 +17,14 @@ env:
 
 jobs:
   verify:
-    name: Android offline checks
+    name: Offline logic checks
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      apk_name: ${{ steps.metadata.outputs.apk_name }}
+      ipa_name: ${{ steps.metadata.outputs.ipa_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -35,7 +40,7 @@ jobs:
         run: |
           dart format --output=none --set-exit-if-changed lib test tool integration_test
           flutter analyze --no-pub --fatal-infos
-      - name: Test signing preparation with fake credentials
+      - name: Test CI helpers with offline fixtures
         run: python3 -m unittest discover -s test/ci -v
       - name: Run logic tests
         # UI, layout and golden tests remain local; CI checks logic only.
@@ -49,11 +54,29 @@ jobs:
               raise SystemExit('No logic tests were found.')
           subprocess.run(['flutter', 'test', '--no-pub', '--coverage', *tests], check=True)
           PYTEST
+      - name: Prepare release metadata
+        id: metadata
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          match = re.search(r'^version:\s*(.+)$', Path('pubspec.yaml').read_text(), re.MULTILINE)
+          if not match:
+              raise SystemExit('pubspec.yaml has no version.')
+          version = match.group(1).strip().strip("\"'").split('+', 1)[0]
+          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', version):
+              raise SystemExit('Unsupported release version.')
+          tag = f"v{version}-build.{os.environ['GITHUB_RUN_NUMBER']}"
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\ntag={tag}\n')
+              output.write(f'apk_name=xiaoyu-{tag}-arm64-v8a.apk\n')
+              output.write(f'ipa_name=xiaoyu-{tag}-unsigned.ipa\n')
+          PY
       - name: Preserve test diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: android-checks-${{ github.run_id }}
+          name: mobile-checks-${{ github.run_id }}
           path: coverage/
           if-no-files-found: ignore
           retention-days: 14
@@ -63,9 +86,8 @@ jobs:
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    outputs:
-      tag: ${{ steps.metadata.outputs.tag }}
-      version: ${{ steps.metadata.outputs.version }}
+    env:
+      APK_NAME: ${{ needs.verify.outputs.apk_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -86,24 +108,6 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: python3 tool/ci/prepare_android_signing.py
-      - name: Prepare release metadata
-        id: metadata
-        run: |
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          match = re.search(r'^version:\s*(.+)$', Path('pubspec.yaml').read_text(), re.MULTILINE)
-          if not match:
-              raise SystemExit('pubspec.yaml has no version.')
-          version = match.group(1).strip().strip("\"'").split('+', 1)[0]
-          if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', version):
-              raise SystemExit('Unsupported release version.')
-          tag = f"android-v{version}-build.{os.environ['GITHUB_RUN_NUMBER']}"
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'version={version}\ntag={tag}\n')
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write(f'APK_NAME=xiaoyu-{tag}-arm64-v8a.apk\n')
-          PY
       - name: Build release APK
         run: |
           flutter pub get
@@ -126,53 +130,100 @@ jobs:
           Path('dist').mkdir()
           shutil.copyfile(apk, Path('dist') / os.environ['APK_NAME'])
           PY
-          cd dist
-          sha256sum "$APK_NAME" > SHA256SUMS.txt
-          cat > release-notes.md <<EOF
-          小遇 Android 自动构建预发布版本。
-
-          - 源码提交：$GITHUB_SHA
-          - 来源分支：$GITHUB_REF_NAME
-          - 最低系统：Android 8.0；仅支持 arm64-v8a（64 位 ARM）设备
-          - APK 使用固定的小遇签名；此前的调试签名安装包需要先卸载。
-          - 真实通话需要自行配置 Vidu API Key，云端费用以平台记录为准。
-          - 自动检查及签名校验不代表真实 RTC、设备和视觉验收。
-
-          下载 APK 即可安装，SHA256SUMS.txt 用于核对文件摘要。
-          EOF
       - name: Upload release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: android-release-${{ github.run_id }}
-          path: dist/
+          name: mobile-android-${{ github.run_id }}
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 14
       - name: Remove signing material
         if: always()
         run: rm -f android/key.properties "$RUNNER_TEMP/xiaoyu-release.jks"
 
+  ios:
+    name: Unsigned iOS device IPA
+    needs: verify
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      IPA_NAME: ${{ needs.verify.outputs.ipa_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Resolve dependencies with Swift Package Manager
+        run: |
+          flutter config --enable-swift-package-manager
+          flutter pub get
+      - name: Build an unsigned iPhoneOS app
+        run: flutter build ios --release --no-codesign --no-pub --build-number "$((1000 + GITHUB_RUN_NUMBER))"
+      - name: Package the unsigned IPA
+        run: |
+          xcrun lipo build/ios/iphoneos/Runner.app/Runner -verify_arch arm64
+          python3 tool/ci/package_unsigned_ipa.py build/ios/iphoneos/Runner.app "dist/$IPA_NAME"
+      - name: Upload unsigned release files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mobile-ios-${{ github.run_id }}
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
-    name: Publish GitHub Release
-    needs: android
+    name: Publish APK and IPA together
+    needs: [verify, android, ios]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Download the Android APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: android-release-${{ github.run_id }}
+          name: mobile-android-${{ github.run_id }}
           path: dist
-      - name: Upload APK and publish the prerelease
+      - name: Download the unsigned iOS IPA
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mobile-ios-${{ github.run_id }}
+          path: dist
+      - name: Prepare combined release files
+        env:
+          APK_NAME: ${{ needs.verify.outputs.apk_name }}
+          IPA_NAME: ${{ needs.verify.outputs.ipa_name }}
+        run: |
+          cd dist
+          test -s "$APK_NAME"
+          test -s "$IPA_NAME"
+          sha256sum "$APK_NAME" "$IPA_NAME" > SHA256SUMS.txt
+          cat > release-notes.md <<EOF
+          小遇 Android / iOS 自动构建预发布版本。
+
+          - 源码提交：$GITHUB_SHA
+          - 来源分支：$GITHUB_REF_NAME
+          - Android：签名 Release APK，仅支持 arm64-v8a，最低 Android 8.0；下载后可安装。
+          - iOS：未签名 ARM64 Release IPA，最低 iOS 15；需要自行有效重签后安装。
+          - 真实通话需要在 App 中配置 Vidu API Key。
+          - 自动检查和打包成功不代表 UI、设备、重签安装或真实 RTC 验收。
+
+          APK 和 IPA 来自同一次工作流、同一源码提交，SHA256SUMS.txt 包含两份安装包的摘要。
+          EOF
+      - name: Publish one prerelease with both packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.android.outputs.tag }}
-          APP_VERSION: ${{ needs.android.outputs.version }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          APP_VERSION: ${{ needs.verify.outputs.version }}
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --prerelease --title "小遇 Android $APP_VERSION · build $GITHUB_RUN_NUMBER" --notes-file dist/release-notes.md
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --prerelease --title "小遇 $APP_VERSION · Android / iOS · build $GITHUB_RUN_NUMBER" --notes-file dist/release-notes.md
           fi
-          gh release upload "$RELEASE_TAG" dist/*.apk dist/SHA256SUMS.txt --clobber
+          gh release upload "$RELEASE_TAG" dist/*.apk dist/*.ipa dist/SHA256SUMS.txt --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           echo "Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

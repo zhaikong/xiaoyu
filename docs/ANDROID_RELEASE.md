@@ -1,22 +1,22 @@
-# Android 自动发布
+# Android / iOS 自动发布
 
 [返回 README](../README.md) · [开发指南](DEVELOPMENT.md)
 
 ## 发布流程
 
-工作流位于 [.github/workflows/android-release.yml](../.github/workflows/android-release.yml)。推送到 `main` 或在 Actions 页面手动运行都会触发：
+统一工作流 **Mobile release** 位于 [.github/workflows/android-release.yml](../.github/workflows/android-release.yml)，包含 Android APK 和 iOS 未签名 IPA。推送到 `main` 或在 Actions 页面手动运行都会触发：
 
-1. Ubuntu 24.04 使用固定 Flutter 3.50.0 / Dart 3.14.0 检查格式、静态分析、CI 辅助脚本及逻辑测试，生成覆盖率数据。APK 工作流不依赖 macOS 或苹方字体。
-2. Ubuntu 24.04 / JDK 17 使用仓库 Secrets 恢复签名配置，构建仅包含 `arm64-v8a` 的 release APK，并验证 APK 签名。
-3. 独立发布任务使用 `GITHUB_TOKEN` 创建草稿、上传 APK 和 SHA-256 摘要，再发布 GitHub 预发布版本。
+1. Ubuntu 24.04 使用固定 Flutter 3.50.0 / Dart 3.14.0 检查格式、静态分析、CI 辅助脚本及逻辑测试，生成覆盖率数据。逻辑检查不依赖 macOS 或苹方字体。
+2. 两端并行打包：Ubuntu 24.04 / JDK 17 使用仓库 Secrets 构建签名 `arm64-v8a` APK；macOS 15 使用 Swift Package Manager 构建并封装未签名 ARM64 IPA。
+3. 两端都成功后，唯一的发布任务创建一个 GitHub 预发布版本，同时上传 APK、IPA 和包含两份摘要的 `SHA256SUMS.txt`。
 
-Release 标签为 `android-v<pubspec版本>-build.<运行编号>`，固定对应本次源码提交。Flutter 基础版本码为 `1000 + GITHUB_RUN_NUMBER`，ARM64 分包另加 ABI 偏移 `2000`，最终为 `3000 + GITHUB_RUN_NUMBER`；同一次运行重试沿用标签并覆盖对应附件。新提交会取消同分支尚未完成的旧构建。
+Release 标签为 `v<pubspec版本>-build.<运行编号>`，固定对应本次源码提交。Flutter 基础版本码为 `1000 + GITHUB_RUN_NUMBER`，ARM64 分包另加 ABI 偏移 `2000`，最终为 `3000 + GITHUB_RUN_NUMBER`；同一次运行重试沿用标签并覆盖对应附件。新提交会取消同分支尚未完成的旧构建。
 
-APK 工作流中的检查和构建成功后才对用户公开 Release。失败或取消的上传可能留下未公开草稿，不会把不完整版本作为可下载发布。检查日志和构建产物在 Actions 中保留 14 天，Release 附件独立保留。
+逻辑检查、Android 和 iOS 构建全部成功后才对用户公开 Release，任何一端失败都不会创建本次的完整发布。失败或取消的上传可能留下未公开草稿，不会把不完整版本作为可下载发布。检查日志和构建产物在 Actions 中保留 14 天，Release 附件独立保留。
 
 ## 验证范围
 
-按用户要求，GitHub Actions 不运行 UI、布局、黄金图或设备测试，也不查找系统字体。Android 逻辑测试覆盖 domain、application、data、presentation 及非布局 Harness 测试；使用 WidgetTester 虚拟时间但不构建页面的业务计时测试仍属于逻辑检查。UI 测试和完整 `dart run tool/harness.dart check` 保留在本地。CI 覆盖率文件仅供查看，不代表完整 Harness 的 80/60 门槛或 UI/设备验收通过。
+按用户要求，GitHub Actions 不运行 UI、布局、黄金图或设备测试，也不查找系统字体。共享逻辑测试覆盖 domain、application、data、presentation 及非布局 Harness 测试；使用 WidgetTester 虚拟时间但不构建页面的业务计时测试仍属于逻辑检查。UI 测试和完整 `dart run tool/harness.dart check` 保留在本地。CI 覆盖率文件仅供查看，不代表完整 Harness 的 80/60 门槛或 UI/设备验收通过。
 
 ## 一次性签名配置
 
@@ -52,4 +52,4 @@ flutter build apk --release --target-platform android-arm64 --split-per-abi
 
 此前使用调试签名的版本无法被新正式签名覆盖，需要先卸载；卸载会删除应用本地角色和历史。后续同一正式签名的版本可正常覆盖升级。
 
-APK 构建、签名和离线检查不证明真实 RTC、云端计费或设备视觉效果已经验收。当前为内测分发；[iOS 未签名 IPA](IOS_RELEASE.md) 由独立工作流构建，下载后需要自行重签安装。
+APK 构建、签名和离线检查不证明真实 RTC、云端计费或设备视觉效果已经验收。当前为内测分发；[iOS 未签名 IPA](IOS_RELEASE.md) 在同一工作流构建并附于同一 Release，下载后需要自行重签安装。

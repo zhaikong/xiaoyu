@@ -311,3 +311,6 @@ Character 在既有 config JSON 增加 voiceProvider，旧记录默认为 qwen_o
 
 
 按用户最新要求，GitHub Actions 停止运行 UI、布局和黄金图测试，删除独立 UI 工作流及仅供 CI 使用的字体定位脚本；本地测试与完整 Harness 门槛保留。Android CI 选择 domain/application/data/presentation 和非布局 Harness 逻辑测试，不将虚拟时间业务测试误判为页面测试。此决定取代此前独立 macOS UI 工作流方案，避免把 CI 覆盖率文件误称完整 Harness 门槛通过。另修复 iOS 打包 lipo 参数顺序：输入文件必须在 -verify_arch arm64 之前，否则文件路径会被解析为架构名称。来源：GitHub Xcode 16.4 错误日志中的 lipo 使用说明及本机 xcrun lipo 检查。
+
+
+按用户要求，将 Android 与 iOS 发布合并为一个 Mobile release 工作流。共享任务输出同一版本、标签和安装包文件名，逻辑检查只执行一次；Linux APK 与 macOS 未签名 IPA 并行构建，唯一发布任务依赖两端成功，收集两份安装包并生成联合 SHA256SUMS，再发布同一 Release。任一端失败不执行发布，重试同次运行复用标签。保留原 android-release.yml 路径及运行编号连续性，避免新工作流重置 Android 版本码；删除独立 iOS 工作流。替代方案：仅把两个独立发布任务放入同一 YAML 仍会创建两个 Release；复用标签但由两端分别公开会暴露暂缺另一端附件的版本。因此采用唯一汇总发布任务。来源：[GitHub Actions 工作流依赖语法](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#jobsjob_idneeds)。继续只发布 ARM64 APK、未签名 IPA，GitHub 不运行 UI 测试。

@@ -49,8 +49,6 @@ migrate_working_dir/
 *.dSYM/
 
 # Local credentials, signing material, and runtime data (not app sources).
-.env
-.env.*
 !.env.example
 !.env.template
 *.p12
@@ -83,3 +81,5 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+config.bat
+node_modules
